@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pittsburg, Kansas</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  html, body, #map { height: 100%; margin: 0; }
+  body { font-family: system-ui, sans-serif; }
+  .label { background: #fff; border: 1px solid #5f5e5a; border-radius: 4px; color: #2c2c2a; font-size: 12px; padding: 2px 6px; box-shadow: none; }
+  .label::before { display: none; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+const places = [
+  { name: "Downtown Pittsburg", lat: 37.4074995, lng: -94.7045202, color: "#0F6E56" },
+  { name: "Memorial Auditorium", lat: 37.412445, lng: -94.7067405, color: "#0F6E56" },
+  { name: "Public Library", lat: 37.41068, lng: -94.70738, color: "#0F6E56" },
+  { name: "Pittsburg State University", lat: 37.390414, lng: -94.691094, color: "#993C1D" },
+  { name: "Overman Student Center", lat: 37.3920275, lng: -94.7024846, color: "#993C1D" },
+  { name: "Axe Library", lat: 37.3924543, lng: -94.6999935, color: "#993C1D" },
+  { name: "Carnie Smith Stadium", lat: 37.3910224, lng: -94.6997633, color: "#993C1D" },
+  { name: "Pittsburg High School", lat: 37.4087603, lng: -94.671978, color: "#993C1D" },
+  { name: "Mercy Hospital Pittsburg", lat: 37.380219, lng: -94.6846702, color: "#534AB7" }
+];
+
+const map = L.map("map");
+const carto = L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png", {
+  maxZoom: 19, subdomains: "abcd",
+  attribution: "&copy; <a href='https://www.openstreetmap.org/copyright'>OpenStreetMap</a> contributors &copy; <a href='https://carto.com/attributions'>CARTO</a>"
+});
+const esri = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}", {
+  maxZoom: 19,
+  attribution: "Tiles &copy; Esri"
+});
+const sat = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+  maxZoom: 19,
+  attribution: "Tiles &copy; Esri"
+});
+carto.addTo(map);
+L.control.layers({ "Streets (CARTO)": carto, "Streets (Esri)": esri, "Satellite": sat }).addTo(map);
+L.control.scale({ imperial: true, metric: true }).addTo(map);
+
+const bounds = [];
+places.forEach(p => {
+  L.circleMarker([p.lat, p.lng], { radius: 7, color: "#fff", weight: 2, fillColor: p.color, fillOpacity: 1 })
+    .bindTooltip(p.name, { permanent: true, direction: "right", offset: [8, 0], className: "label" })
+    .addTo(map);
+  bounds.push([p.lat, p.lng]);
+});
+map.fitBounds(bounds, { padding: [40, 40] });
+</script>
+</body>
+</html>
