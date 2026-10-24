@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pittsburg, Kansas street map</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  html, body, #map { height: 100%; margin: 0; }
+  body { font-family: system-ui, sans-serif; }
+  #map { background: #eceee6; }
+  #status { position: absolute; z-index: 1000; left: 50%; top: 12px; transform: translateX(-50%); background: #fff; border: 1px solid #888780; border-radius: 6px; padding: 6px 12px; font-size: 13px; color: #2c2c2a; }
+  #status button { margin-left: 8px; }
+  .place { background: #fff; border: 1px solid #444441; border-radius: 4px; color: #2c2c2a; font-size: 12px; font-weight: 600; padding: 2px 6px; box-shadow: none; }
+  .place::before { display: none; }
+  .road-label { background: none; border: none; box-shadow: none; padding: 0; color: #4a4a45; font-size: 11px; font-weight: 500; text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 3px #fff, 0 0 3px #fff; }
+  .road-label::before { display: none; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="status">Loading streets from OpenStreetMap…</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+const places = [
+  { name: "Downtown Pittsburg", lat: 37.4074995, lng: -94.7045202, color: "#0F6E56" },
+  { name: "Memorial Auditorium", lat: 37.412445, lng: -94.7067405, color: "#0F6E56" },
+  { name: "Public Library", lat: 37.41068, lng: -94.70738, color: "#0F6E56" },
+  { name: "Pittsburg State University", lat: 37.390414, lng: -94.691094, color: "#993C1D" },
+  { name: "Overman Student Center", lat: 37.3920275, lng: -94.7024846, color: "#993C1D" },
+  { name: "Axe Library", lat: 37.3924543, lng: -94.6999935, color: "#993C1D" },
+  { name: "Carnie Smith Stadium", lat: 37.3910224, lng: -94.6997633, color: "#993C1D" },
+  { name: "Pittsburg High School", lat: 37.4087603, lng: -94.671978, color: "#993C1D" },
+  { name: "Mercy Hospital Pittsburg", lat: 37.380219, lng: -94.6846702, color: "#534AB7" }
+];
+
+const BBOX = [37.365, -94.725, 37.435, -94.645];
+const ENDPOINTS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
+  "https://overpass.private.coffee/api/interpreter"
+];
+
+const statusEl = document.getElementById("status");
+function setStatus(text, retry) {
+  statusEl.style.display = text ? "block" : "none";
+  statusEl.textContent = text || "";
+  if (text && retry) {
+    const b = document.createElement("button");
+    b.textContent = "Try again";
+    b.onclick = retry;
+    statusEl.appendChild(b);
+  }
+}
+
+async function overpass(query) {
+  let lastErr;
+  for (const url of ENDPOINTS) {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "data=" + encodeURIComponent(query)
+      });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return await res.json();
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr;
+}
+
+const map = L.map("map", { zoomSnap: 0.5, minZoom: 11, maxZoom: 19 });
+function makePane(name, z) { map.createPane(name).style.zIndex = z; return L.canvas({ pane: name, padding: 0.5 }); }
+const rAreas = makePane("areas", 410);
+const rBuild = makePane("build", 415);
+const rCase = makePane("roadcase", 420);
+const rRoad = makePane("road", 430);
+L.control.scale({ imperial: true, metric: true }).addTo(map);
+map.attributionControl.addAttribution("Map data &copy; <a href='https://www.openstreetmap.org/copyright'>OpenStreetMap</a> contributors");
+
+const bounds = places.map(p => [p.lat, p.lng]);
+map.fitBounds(bounds, { padding: [50, 50] });
+
+places.forEach(p => {
+  L.circleMarker([p.lat, p.lng], { pane: "markerPane", radius: 7, color: "#fff", weight: 2, fillColor: p.color, fillOpacity: 1 })
+    .bindTooltip(p.name, { permanent: true, direction: "right", offset: [8, 0], className: "place" })
+    .addTo(map);
+});
+
+const STYLE = {
+  motorway: ["#f0a23a", 9], trunk: ["#f0a23a", 9], primary: ["#f5c46b", 8], secondary: ["#fadf93", 7],
+  tertiary: ["#ffffff", 6], unclassified: ["#ffffff", 5], residential: ["#ffffff", 4.5],
+  living_street: ["#ffffff", 3.5], service: ["#ffffff", 2.5]
+};
+const RANK = ["service", "living_street", "residential", "unclassified", "tertiary", "secondary", "primary", "trunk", "motorway"];
+const MAJOR = ["tertiary", "secondary", "primary", "trunk", "motorway"];
+const base = h => h.replace("_link", "");
+const scale = () => Math.max(0.3, Math.pow(1.32, map.getZoom() - 14));
+
+const roadLines = [];
+const majorLabels = L.layerGroup();
+const minorLabels = L.layerGroup();
+
+function pathLength(ll) {
+  let d = 0;
+  for (let i = 1; i < ll.length; i++) d += map.distance(ll[i - 1], ll[i]);
+  return d;
+}
+function midPoint(ll, total) {
+  let acc = 0;
+  for (let i = 1; i < ll.length; i++) {
+    const d = map.distance(ll[i - 1], ll[i]);
+    if (d > 0 && acc + d >= total / 2) {
+      const t = (total / 2 - acc) / d;
+      return [ll[i - 1][0] + (ll[i][0] - ll[i - 1][0]) * t, ll[i - 1][1] + (ll[i][1] - ll[i - 1][1]) * t];
+    }
+    acc += d;
+  }
+  return ll[0];
+}
+
+function drawRoads(data) {
+  const ways = data.elements.filter(e => e.type === "way" && e.geometry && e.tags && e.tags.highway && STYLE[base(e.tags.highway)]);
+  ways.sort((a, b) => RANK.indexOf(base(a.tags.highway)) - RANK.indexOf(base(b.tags.highway)));
+  const byName = {};
+  ways.forEach(w => {
+    const ll = w.geometry.map(p => [p.lat, p.lng === undefined ? p.lon : p.lng]);
+    const k = base(w.tags.highway);
+    const st = STYLE[k];
+    const casing = L.polyline(ll, { renderer: rCase, color: "#a8a69c", weight: st[1] * scale() + 1.6, lineCap: "round", lineJoin: "round", interactive: false }).addTo(map);
+    const fill = L.polyline(ll, { renderer: rRoad, color: st[0], weight: st[1] * scale(), lineCap: "round", lineJoin: "round" }).addTo(map);
+    if (w.tags.name) {
+      fill.bindTooltip(w.tags.name, { sticky: true, direction: "top" });
+      const len = pathLength(ll);
+      (byName[w.tags.name] = byName[w.tags.name] || []).push({ ll, len, major: MAJOR.includes(k) });
+    }
+    roadLines.push({ casing, fill, w: st[1] });
+  });
+  Object.entries(byName).forEach(([name, arr]) => {
+    arr.sort((a, b) => b.len - a.len);
+    const major = arr[0].major;
+    arr.slice(0, major ? 3 : 1).forEach(a => {
+      if (a.len < (major ? 150 : 120)) return;
+      const tip = L.tooltip({ permanent: true, direction: "center", className: "road-label", interactive: false })
+        .setLatLng(midPoint(a.ll, a.len)).setContent(name);
+      (major ? majorLabels : minorLabels).addLayer(tip);
+    });
+  });
+  syncZoom();
+}
+
+function drawAreas(data) {
+  data.elements.filter(e => e.type === "way" && e.geometry && e.tags).forEach(w => {
+    const ll = w.geometry.map(p => [p.lat, p.lon]);
+    if (w.tags.waterway) {
+      L.polyline(ll, { renderer: rAreas, color: "#9cc4e4", weight: 3, interactive: false }).addTo(map);
+      return;
+    }
+    const closed = ll.length > 3 && ll[0][0] === ll[ll.length - 1][0] && ll[0][1] === ll[ll.length - 1][1];
+    if (!closed) return;
+    L.polygon(ll, { renderer: rAreas, stroke: false, fillColor: w.tags.natural === "water" ? "#b7d4ee" : "#d3e3c1", fillOpacity: 1, interactive: false }).addTo(map);
+  });
+}
+
+function toggle(group, on) {
+  if (on && !map.hasLayer(group)) map.addLayer(group);
+  if (!on && map.hasLayer(group)) map.removeLayer(group);
+}
+function syncZoom() {
+  const s = scale();
+  roadLines.forEach(r => {
+    r.casing.setStyle({ weight: r.w * s + 1.6 });
+    r.fill.setStyle({ weight: r.w * s });
+  });
+  const z = map.getZoom();
+  toggle(majorLabels, z >= 14.5);
+  toggle(minorLabels, z >= 16);
+}
+map.on("zoomend", syncZoom);
+
+const fetchedBuildings = [];
+const drawnBuildings = new Set();
+let buildTimer;
+async function loadBuildings() {
+  if (map.getZoom() < 16) return;
+  const b = map.getBounds().pad(0.3);
+  if (fetchedBuildings.some(f => f.contains(b))) return;
+  setStatus("Loading buildings…");
+  try {
+    const q = `[out:json][timeout:40];way["building"](${b.getSouth()},${b.getWest()},${b.getNorth()},${b.getEast()});out geom;`;
+    const data = await overpass(q);
+    fetchedBuildings.push(b);
+    data.elements.forEach(w => {
+      if (w.type !== "way" || !w.geometry || drawnBuildings.has(w.id)) return;
+      drawnBuildings.add(w.id);
+      L.polygon(w.geometry.map(p => [p.lat, p.lon]), { renderer: rBuild, color: "#c4c0b4", weight: 0.8, fillColor: "#dedbd2", fillOpacity: 1, interactive: false }).addTo(map);
+    });
+    setStatus("");
+  } catch (e) {
+    setStatus("Couldn't load buildings.", loadBuildings);
+  }
+}
+map.on("moveend", () => { clearTimeout(buildTimer); buildTimer = setTimeout(loadBuildings, 500); });
+
+async function loadMap() {
+  setStatus("Loading streets from OpenStreetMap…");
+  const box = BBOX.join(",");
+  try {
+    const roads = await overpass(`[out:json][timeout:60];way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$"](${box});out geom;`);
+    drawRoads(roads);
+    setStatus("");
+    overpass(`[out:json][timeout:60];(way["natural"="water"](${box});way["waterway"~"^(river|stream|canal)$"](${box});way["leisure"~"^(park|pitch|golf_course|recreation_ground|playground)$"](${box});way["landuse"~"^(grass|recreation_ground|cemetery|forest)$"](${box}););out geom;`)
+      .then(drawAreas).catch(() => {});
+    loadBuildings();
+  } catch (e) {
+    setStatus("Couldn't reach the OpenStreetMap data server.", loadMap);
+  }
+}
+loadMap();
+</script>
+</body>
+</html>
